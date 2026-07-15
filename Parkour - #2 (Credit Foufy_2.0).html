@@ -1,0 +1,320 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+    <meta charset="UTF-8">
+    <title>LEVEL 15 - THE LIMIT BREAK</title>
+    <style>
+        body { margin: 0; overflow: hidden; background: #1a001a; font-family: 'monospace', sans-serif; user-select: none; }
+        
+        /* HUD */
+        #ui-layer { position: absolute; top: 0; left: 0; width: 100%; height: 100%; pointer-events: none; }
+        
+        #crosshair {
+            position: absolute; top: 50%; left: 50%;
+            width: 4px; height: 4px; border: 2px solid #ff00ff;
+            background: transparent; border-radius: 50%;
+            transform: translate(-50%, -50%) scale(1.2);
+            box-shadow: 0 0 15px #ff00ff;
+        }
+
+        #hud-top {
+            position: absolute; top: 20px; width: 100%; text-align: center;
+            display: flex; justify-content: center; gap: 40px;
+            font-size: 20px; color: #ff00ff; text-shadow: 0 0 10px #ff00ff;
+        }
+
+        #status-msg {
+            position: absolute; top: 40%; width: 100%; text-align: center;
+            font-size: 40px; font-weight: bold;
+            color: #ffffff; text-shadow: 0 0 15px #ffffff; opacity: 0; transition: opacity 0.5s;
+        }
+
+        /* Start Screen */
+        #start-screen {
+            position: absolute; top: 0; left: 0; width: 100%; height: 100%;
+            background: rgba(30, 0, 30, 0.95); color: white;
+            display: flex; flex-direction: column; justify-content: center; align-items: center;
+            z-index: 999; pointer-events: all; cursor: pointer;
+        }
+        h1 { font-size: 80px; margin: 0; color: #ff00ff; letter-spacing: 10px; text-shadow: 0 0 20px #ff00ff; }
+        .feature { margin-top: 15px; font-size: 22px; }
+        .limit-color { color: #ffffff; font-weight: bold; }
+        .info { font-size: 16px; color: #aaa; margin-top: 30px; }
+		
+		.credit {
+  position: fixed;
+  bottom: 10px;
+  right: 10px;
+  font-size: 12px;
+  color: #666;
+  z-index: 1000;
+}
+    </style>
+</head>
+<body>
+
+    <div id="start-screen">
+        <h1>THE LIMIT BREAK</h1>
+        <p class="feature">MÉCANIQUE : Sauts <span class="limit-color">ULTRA-EXTRÊMES</span> (10 à 16 unités - Limite de saut)</p>
+        <p class="feature">FRÉQUENCE (FIX) : **CHECKPOINT TOUS LES 5 BLOCS** (Sécurité maximale).</p>
+        <p class="info">Cliquez sur l'écran pour activer les contrôles.</p>
+        <p style="margin-top: 50px; font-size: 14px; color: #666;">[ CLIQUE POUR DÉPASSER LA LIMITE ]</p>
+    </div>
+
+    <div id="ui-layer">
+        <div id="hud-top">
+            <div>MORTS: <span id="deaths">0</span></div>
+            <div>STATUS: <span id="status">NORMAL</span></div>
+            <div>FPS: <span id="fps">60</span></div>
+        </div>
+        <div id="status-msg">CHECKPOINT</div>
+        <div id="crosshair"></div>
+    </div>
+	
+	<a class=credit>Crédit HTML : Foufy_2.0<a>
+
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+
+    <script>
+        // --- AUDIO (Attenuated) ---
+        const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+        function playSound(type) {
+            if (audioCtx.state === 'suspended') audioCtx.resume();
+            const osc = audioCtx.createOscillator();
+            const gain = audioCtx.createGain();
+            osc.connect(gain); gain.connect(audioCtx.destination);
+            const now = audioCtx.currentTime;
+
+            const baseGain = 0.03; 
+            
+            if (type === 'jump') {
+                osc.type = 'triangle'; osc.frequency.setValueAtTime(440, now); gain.gain.setValueAtTime(baseGain, now);
+                gain.gain.linearRampToValueAtTime(0, now+0.1); osc.start(); osc.stop(now+0.1);
+            } else if (type === 'check') {
+                osc.type = 'sine'; osc.frequency.setValueAtTime(700, now); osc.frequency.linearRampToValueAtTime(900, now+0.3);
+                gain.gain.setValueAtTime(baseGain * 4, now); gain.gain.linearRampToValueAtTime(0, now+0.5); osc.start(); osc.stop(now+0.5);
+            }
+        }
+
+        // --- CONFIGURATION ---
+        const CONFIG = {
+            speed: 8.0, runSpeed: 16.0,
+            gravity: 28.0,
+            jumpForce: 12.0,
+            coyoteTime: 100,
+        };
+
+        let stats = { deaths: 0 };
+        
+        // --- SCÈNE ---
+        const scene = new THREE.Scene();
+        scene.background = new THREE.Color(0x1a001a); 
+        scene.fog = new THREE.FogExp2(0x1a001a, 0.008); 
+
+        const camera = new THREE.PerspectiveCamera(75, window.innerWidth/window.innerHeight, 0.1, 2000); 
+        const renderer = new THREE.WebGLRenderer({antialias: true});
+        renderer.setSize(window.innerWidth, window.innerHeight);
+        document.body.appendChild(renderer.domElement);
+
+        // Lumières
+        const amb = new THREE.AmbientLight(0xffffff, 0.3);
+        scene.add(amb);
+        const dir = new THREE.DirectionalLight(0xff00ff, 0.8); // Lumière Magenta
+        dir.position.set(100, 150, 100);
+        scene.add(dir);
+
+        // --- TEXTURES ---
+        function createTex(color) {
+            const c = document.createElement('canvas'); c.width=64; c.height=64;
+            const ctx = c.getContext('2d');
+            ctx.fillStyle = '#441144'; ctx.fillRect(0,0,64,64); 
+
+            ctx.strokeStyle = color; ctx.lineWidth = 2; ctx.strokeRect(0,0,64,64);
+            ctx.fillStyle = color; ctx.fillRect(16,16,32,32);
+            
+            const t = new THREE.CanvasTexture(c);
+            t.magFilter = THREE.NearestFilter;
+            return t;
+        }
+
+        const mats = {
+            normal: new THREE.MeshStandardMaterial({map: createTex('#ff00ff'), roughness: 0.7, metalness: 0.3}),
+            check: new THREE.MeshStandardMaterial({map: createTex('#ffffff'), roughness: 0.5, emissive: 0x333333}),
+        };
+        
+        const matMap = {
+            'normal': mats.normal, 'check': mats.check
+        };
+
+        // --- MAP GENERATION (4500 blocs - LIMITE) ---
+        const objects = []; 
+        const checkpoints = [];
+        let lastCP = new THREE.Vector3(0,2,0);
+        
+        function createBlock(x,y,z,w,h,d, type) {
+            const mat = matMap[type];
+            const geo = new THREE.BoxGeometry(w,h,d);
+            const mesh = new THREE.Mesh(geo, mat.clone());
+            mesh.position.set(x,y,z);
+            mesh.userData = { type: type };
+            
+            scene.add(mesh);
+            objects.push(mesh);
+            
+            if(type==='check') checkpoints.push({pos: new THREE.Vector3(x,y+h+2,z), active: false});
+            return mesh;
+        }
+
+        // DÉBUT
+        createBlock(0, -2, 0, 10, 4, 10, 'check');
+
+        // Premier saut facile et bas
+        let cx=0, cy=0, cz=-5; 
+        createBlock(cx, cy, cz, 4, 0.5, 4, 'normal'); 
+
+        // Boucle de génération (4500 blocs)
+        const TOTAL_BLOCKS = 4500;
+        
+        for(let i=0; i<TOTAL_BLOCKS; i++) {
+            let r = Math.random();
+            
+            // CHECKPOINT TRÈS FRÉQUENT (TOUS LES 5 BLOCS)
+            if(i > 0 && i % 5 === 0) {
+                cz -= 8; cx = 0; 
+                createBlock(cx, cy, cz, 6, 1, 6, 'check');
+                continue;
+            }
+
+            // NOUVELLE DISTANCE EXTRÊME : 10 à 16 unités.
+            cz -= (10 + Math.random()*6); 
+            cx += (Math.random()-0.5)*7; 
+            
+            // Dénivelé minimal : -0.5 à +0.5 par rapport au bloc précédent
+            cy += (Math.random()-0.5) * 1; 
+
+            // Sécurité Y
+            if(cy < -2) cy = -2;
+            if(cy > 10) cy = 10;
+
+            createBlock(cx, cy, cz, 3 + Math.random()*2, 0.5, 3 + Math.random()*2, 'normal'); 
+        }
+
+        // FIN (Bloc final grand et blanc)
+        cz -= 20;
+        createBlock(cx, cy, cz, 20, 1, 20, 'check');
+
+
+        // --- JOUEUR ---
+        const player = { vel: new THREE.Vector3(), onGround: false, lastG: 0 };
+        camera.position.set(0,2,0);
+        const ray = new THREE.Raycaster(new THREE.Vector3(), new THREE.Vector3(0,-1,0), 0, 2.0);
+        
+        const keys = {};
+        document.onkeydown = e => keys[e.key.toLowerCase()] = true;
+        document.onkeyup = e => keys[e.key.toLowerCase()] = false;
+
+        let yaw=0, pitch=0;
+        document.body.onclick = () => {
+            document.body.requestPointerLock();
+            document.getElementById('start-screen').style.display='none';
+            if(audioCtx.state==='suspended') audioCtx.resume();
+        };
+        document.onmousemove = e => {
+            if(document.pointerLockElement) {
+                yaw -= e.movementX*0.002;
+                pitch -= e.movementY*0.002;
+                pitch = Math.max(-1.5, Math.min(1.5, pitch));
+                camera.rotation.set(pitch, yaw, 0, 'YXZ');
+            }
+        };
+
+        function die() {
+            camera.position.copy(lastCP);
+            player.vel.set(0,0,0);
+            stats.deaths++;
+            document.getElementById('deaths').innerText = stats.deaths;
+        }
+
+        // --- BOUCLE ---
+        const clock = new THREE.Clock();
+
+        function animate() {
+            requestAnimationFrame(animate);
+            const dt = Math.min(clock.getDelta(), 0.1);
+            
+            if(!document.pointerLockElement) return;
+
+            // 1. Gravité
+            player.vel.y -= CONFIG.gravity * dt;
+
+            // 2. Collision Sol
+            ray.ray.origin.copy(camera.position); ray.ray.origin.y -= 0.5;
+            const hits = ray.intersectObjects(objects);
+            
+            if(hits.length > 0 && hits[0].distance < 1.6 && player.vel.y <= 0) {
+                const obj = hits[0].object;
+
+                player.onGround = true;
+                player.vel.y = 0;
+                camera.position.y = hits[0].point.y + 1.8;
+                player.lastG = Date.now();
+                
+                document.getElementById('status').innerText = "NORMAL";
+            } else {
+                player.onGround = false;
+                document.getElementById('status').innerText = "AIR";
+            }
+
+            // 3. Mouvement
+            const spd = keys['shift'] ? CONFIG.runSpeed : CONFIG.speed;
+            const dir = new THREE.Vector3();
+            const fwd = new THREE.Vector3(0,0,-1).applyAxisAngle(new THREE.Vector3(0,1,0), yaw);
+            const right = new THREE.Vector3(1,0,0).applyAxisAngle(new THREE.Vector3(0,1,0), yaw);
+            
+            if(keys['w']) dir.add(fwd); if(keys['s']) dir.sub(fwd);
+            if(keys['d']) dir.add(right); if(keys['a']) dir.sub(right);
+            
+            if(dir.length()>0) dir.normalize().multiplyScalar(spd*dt);
+            
+            camera.position.add(dir);
+            camera.position.y += player.vel.y * dt;
+
+            // 4. Saut
+            const canJump = player.onGround || (Date.now()-player.lastG < CONFIG.coyoteTime);
+            if(keys[' '] && canJump && player.vel.y <= 0) {
+                player.vel.y = CONFIG.jumpForce;
+                player.onGround = false; player.lastG = 0;
+                camera.position.y += 0.2; playSound('jump');
+            }
+
+            // 5. Checkpoints & Mort
+            checkpoints.forEach(cp => {
+                if(!cp.active && camera.position.distanceTo(cp.pos) < 6) {
+                    cp.active = true; lastCP.copy(cp.pos); lastCP.y += 2;
+                    playSound('check');
+                    document.getElementById('status-msg').style.opacity = 1; 
+                    document.getElementById('status-msg').innerText = "LIMITE SAUVEGARDÉE (1/5)";
+                    setTimeout(()=>document.getElementById('status-msg').style.opacity=0, 2000);
+                }
+            });
+
+            if(camera.position.y < -30) {
+                die();
+            }
+
+            // UI
+            document.getElementById('fps').innerText = Math.round(1/dt);
+
+            renderer.render(scene, camera);
+        }
+
+        window.onresize = () => {
+            camera.aspect = window.innerWidth/window.innerHeight;
+            camera.updateProjectionMatrix();
+            renderer.setSize(window.innerWidth, window.innerHeight);
+        }
+
+        animate();
+    </script>
+</body>
+</html>
